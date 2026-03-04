@@ -1,0 +1,3 @@
+[submodule "cntb"]
+	path = cntb
+	url = https://github.com/contabo/cntb.git

@@ -1,0 +1,112 @@
+#!/bin/sh
+#
+#  utility to show per instance dns reverse lookup
+#  
+#  update custom image with s3 bucket storage qcow2 file
+#
+#  xfer image to nas
+#  
+##############################################################
+
+
+
+NAME=$1
+HOST=''
+GUEST=''
+MYOWNIMAGEVERSION=9
+
+ssh root@$HOST 'apt-get install libnbd-bin'
+
+#nbdcopy -p --destination-is-zero -- [ qemu-nbd -r /dev/sda ] - | ssh root@167.86.116.80 cat '>/gsg_mail.img'
+nbdcopy -p --destination-is-zero -- [ qemu-nbd -r /dev/sda ] - | ssh root@167.86.116.80 cat '>/gsg_mail.img'
+
+echo "login and mount the guest systems entire block device to /mnt/"
+echo "cd /mnt/"
+sudo dd if=/dev/zero of=/mnt/zeroes bs=1M status=progress
+sync
+rm /mnt/zeroes
+cd /
+umount /mnt
+ssh root@$HOST 'qemu-img convert -f raw -O qcow2 -c /dev/sda /dev/stdout' > gsg_mail_sda.qcow2
+#ssh qemu-img convert -f raw -O qcow2 -c /dev/sda gsg_mail_sda.qcow2
+#scp root@$HOST /gsg_mail_sda.qcow2 .
+
+
+
+#  mount image 
+#  edit grub, specify root partition
+#
+#https://manpages.ubuntu.com/manpages/focal/man1/guestmount.1.html
+#  allow_other FUSE option
+guestmount -a gsg_mail.qcow2 --i --rw -o allow_other /mnt/q
+
+fstrim
+ssh root@$HOST 'mkisofs -R -J -l -allow-lowercase -joliet-long -V "gsg" /mnt' > gsg_mail.iso
+
+INSTANCEID=`cntb get instances -o yaml | cperl '/(\w+-\w+-\w+-\w+)/ && print "$1\n";'`
+SID=`cntb get objectStorages -o yaml | cperl '/(\w+-\w+-\w+-\w+)/ && print "$1\n";'`
+BUCKET`cntb get buckets --storageId $SID -o yaml`
+
+cntb get instances -o yaml | cperl '/(name|ipv4): (.*+)/ && print "$1\n";'`
+
+cntb get instances -o yaml | cperl '/(name|ipv4|regionName): (.*+)/ && print "$1\n";'
+cntb get objectStorages -o yaml | cperl '/(name|ipv4): (.*+)/ && print "$1\n";'
+
+
+#
+cntb create object --storageId $SID --bucket $BUCKET --path '$NAME' --prefix '/' --verbose
+
+# 'status
+cntb get images -o yaml | cperl '/(status|url|imageId): (.*+)/ && print "$1 $2\n";'
+
+#public url
+#s3TenantId
+
+#cntb get objectStorage $SID -o yaml
+https://eu2.contabostorage.com/6a7cfe536b3945eca5da4cd9196d73f7:250gb/gsg_mail.qcow2
+
+#--url "s3Url/s3TenantId:$BUCKET/$NAME"
+
+#nathaniel@hawkeye ~/bin $ cntb create image --name 'gsg' --description '_' --osType Linux --version ${MYOWNIMAGEVERSION} --url "https://eu2.contabostorage.com/6a7cfe536b3945eca5da4cd9196d73f7:250gb/gsg_mail.qcow2"
+#ERROR Error while creating image.: 402 - The total image size is exceeded. Allowed image size is max 25600MB 
+#FATAL Aborting, due to errors  
+
+#  Rocky linux 9+ caveat regarding UUIDs and /boot/loader/entries/ '
+virt-sysprep  -vx -a /mnt/win/gsg_mail.qcow2 --run-command 'sudo grub2-mkconfig -o /boot/grub2/grub.cfg --update-bls-cmdline'
+
+qemu-system-x86_64 -m 4G -hda /mnt/win/gsg_mail.qcow2 -blockdev driver=qcow2,file.filename=/mnt/win/gsg_mail.qcow2,file.locking=off,file.driver=file,node-name=drive0 -kernel /boot/vmlinuz-6.17.12-300.fc43.x86_64 -append "root=/dev/sda3 console=ttyS0"
+
+
+# https://arianfm.medium.com/create-virtual-machine-with-cloud-image-and-cloud-init-config-using-qemu-kvm-8080ee6e7f05
+#
+#  iso backed image utililizing one created with cloud-localds
+#  
+#
+#   TODO:  boot any image without specifying the hard drive
+#
+#   use cloud-init xml file (config file)
+#
+
+#wont specify root
+
+#tun tap
+qemu-system-x86_64 \
+  -name my-vm \
+  -m 2048 \
+  -smp 2 \
+  -drive file=my-vm.qcow2,format=qcow2 \
+  -cdrom cloud_init.iso \
+  -netdev tap,id=t0,ifname=tap0,script=no,downscript=no -device e1000,netdev=t0,id=nic0
+
+
+  -net nic,model=virtio \
+  -net user,hostfwd=tcp::2222-:22 \
+  -display none \
+  -daemonize
+
+post boot
+either run
+  qemu-x86_64-static with image
+  or overlay 
+
+qemu-system-x86_64 -m 4G -drive file=/mnt/win/gsg_mail.qcow2,format=qcow
